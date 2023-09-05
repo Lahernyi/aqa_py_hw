@@ -1,70 +1,63 @@
+import sqlite3
 import pytest
-from hillel_api import *
+import pathlib
+
+TEST_DB_URL = pathlib.Path(__file__).parent / "test_users.db"
 
 
-# create new user
-@pytest.fixture()
-def registered_user():
-    register_data = {
-        "name": "notuser",
-        "lastName": "pewpew",
-        "email": "notmail@test.com",
-        "password": "Notpassword1!",
-        "repeatPassword": "Notpassword1!"
-    }
-    r = auth.signup(s, register_data)
-    yield r
-    # Delete user
-    users.users(s)
+@pytest.fixture(scope="session", autouse=True)
+def create_moderate_tables(db_connection):
+    """Фікстура для створення і видалення таблиць"""
+    create_user_table_query = """
+CREATE TABLE IF NOT EXISTS users (
+user_id serial NOT NULL,
+email varchar NOT NULL,
+password varchar NOT NULL
+);
+"""
 
-# create user, log in
-@pytest.fixture()
-def logged_user():
-    register_data = {
-        "name": "notuser",
-        "lastName": "pewpew",
-        "email": "notmail@test.com",
-        "password": "Notpassword1!",
-        "repeatPassword": "Notpassword1!"
-    }
-    auth.signup(s, register_data)
-
-    login_data = {
-        "email": "notmail@test.com",
-        "password": "Notpassword1",
-        "remember": True
-    }
-
-    r = auth.signin(s, login_data)
-    yield r
-
-    # Delete user
-    users.users(s)
+    drop_user_table_query = """
+DROP TABLE users;
+"""
+    db_connection.execute(create_user_table_query)  # Створюємо таблицю на початку прогону тестів
+    db_connection.commit()
+    yield
+    db_connection.execute(drop_user_table_query)    # Видаляємо таблицю після прогону тестів
+    db_connection.commit()
 
 
-# create new car
-@pytest.fixture()
-def create_car():
-    create_car_ok_data = {
-    "carBrandId": 1,
-    "carModelId": 1,
-    "mileage": 23
-    }
-    r = cars.cars_post(s, create_car_ok_data)
-    r_json = after_processsing(r)
+@pytest.fixture(scope="session")  # буде викликана 1 раз за весь час прогону тестової сесії
+def db_connection():
+    """Фікстура для створення з'єднання з базою"""
+    return sqlite3.connect(TEST_DB_URL)
 
-    car_id = r_json["data"]["id"]
-    yield car_id
-    cars.cars_id_delete(s, car_id)
 
-# get instructions
-@pytest.fixture()
-def instructions_data(registered_user, create_car):
-    use_this = {
-        "carBrandId": 1,
-        "carModelId": 1,
-        "page": 1
-    }
-    r = instructions.instructions(s, use_this)
-    r_json = after_processsing(r)
-    yield r_json
+@pytest.fixture(scope="function")  # буде зачищати базу даних якщо передати її як параметр у тест
+def clean_database(db_connection):  # передаємо на вхід результат роботи іншої фікстури
+    """Фікстура для очищення бази від даних до прогону тесту"""
+    db_connection.execute("""DELETE FROM users;""")
+    db_connection.commit()
+
+
+@pytest.fixture(scope="session")
+def create_test_user_in_database_function(db_connection):  # фікстура використовує результат роботи іншої фікстури
+    """Фікстура для створення функції для наповнення бази тестовими даними"""
+
+    def create_user(user_id: int, email: str, password: str):
+        """Функція для наповнення бази тестовими даними"""
+        db_connection.execute("""INSERT INTO users (user_id, email, password) VALUES (?, ?, ?);""",
+                              (user_id, email, password))
+        db_connection.commit()
+    return create_user
+
+
+@pytest.fixture(scope="session")
+def read_users_from_database_function(db_connection):  # фікстура використовує результат роботи іншої фікстури
+    """Фікстура для створення функція для уточнення даних з тестової бази"""
+
+    def read_users():
+        """Функція читання з тестової бази даних"""
+        cursor = db_connection.cursor()
+        cursor.execute("""SELECT * FROM users;""")
+        return cursor.fetchall()
+    return read_users
